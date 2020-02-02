@@ -32,6 +32,8 @@
 #ifndef EXPREVAL_H
 #define EXPREVAL_H
 
+#include <token.h> \\ for asmtok definition
+
 /* v2.11: EXPR_UNDEF changed to EXPR_ERROR, value -1 */
 
 enum exprtype {
