@@ -1612,7 +1612,7 @@ main proc argc:int_t, argv:array_t
         .endsw
     .endf
 
-    .if !option_h && !option_s
+    .if !option_h || !option_s
 
         print_copyright()
     .endif
