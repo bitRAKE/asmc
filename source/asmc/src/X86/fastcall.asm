@@ -796,11 +796,21 @@ CheckXMM proc uses ebx reg:int_t, paramvalue:string_t, regs_used:ptr byte, param
     ; v2.04: check if argument is the correct XMM register already
 
     .if [edi].expr.kind == EXPR_REG && !( [edi].expr.flags & E_INDIRECT )
-        .if GetValueSp( reg ) & OP_XMM
+
+        mov ecx,GetValueSp(reg)
+
+        .if ecx & ( OP_XMM or OP_YMM or OP_ZMM )
+
             lea eax,[esi+T_XMM0]
+            .if ecx & OP_YMM
+                lea eax,[esi+T_YMM0]
+            .elseif ecx & OP_ZMM
+                lea eax,[esi+T_ZMM0]
+            .endif
+
             .if eax != reg
                 mov edx,param
-                .if reg < T_XMM16
+                .if reg < T_XMM16 && ecx & OP_XMM
                     .if [edx].asym.mem_type == MT_REAL4
                         AddLineQueueX(" movss %r, %r", eax, reg)
                     .elseif [edx].asym.mem_type == MT_REAL8
@@ -814,7 +824,7 @@ CheckXMM proc uses ebx reg:int_t, paramvalue:string_t, regs_used:ptr byte, param
                     .elseif [edx].asym.mem_type == MT_REAL8
                         AddLineQueueX(" vmovsd %r, %r, %r", eax, eax, reg)
                     .else
-                        AddLineQueueX(" vmovaps %r, %r, %r", eax, eax, reg)
+                        AddLineQueueX(" vmovaps %r, %r", eax, reg)
                     .endif
                 .endif
             .endif
@@ -959,9 +969,8 @@ ms64_param proc uses esi edi ebx pp:dsym_t, index:int_t, param:dsym_t, address:i
 
                 asmerr(2114, &[esi+1])
 
-            .elseif vector_call && esi < 6 && \
-                    ( [edx].asym.mem_type == MT_REAL16 || [edx].asym.mem_type == MT_OWORD )
-
+            .elseif vector_call && esi < 6 && ( [edx].asym.mem_type & MT_FLOAT || \
+                [edx].asym.mem_type == MT_YWORD || [edx].asym.mem_type == MT_OWORD )
                 .return CheckXMM(reg, paramvalue, regs_used, param)
             .endif
             mov ebx,T_RAX
@@ -1048,7 +1057,7 @@ ms64_param proc uses esi edi ebx pp:dsym_t, index:int_t, param:dsym_t, address:i
             .if [edi].expr.kind == EXPR_REG && !( [edi].expr.flags & E_INDIRECT )
 
                 .if vector_call && esi < 6 && ( [edx].asym.mem_type & MT_FLOAT || \
-                        [edx].asym.mem_type == MT_OWORD )
+                        [edx].asym.mem_type == MT_YWORD || [edx].asym.mem_type == MT_OWORD )
 
                     .return CheckXMM(reg, paramvalue, regs_used, param)
                 .endif
@@ -1137,7 +1146,7 @@ ms64_param proc uses esi edi ebx pp:dsym_t, index:int_t, param:dsym_t, address:i
         .return 1
     .endif
 
-    .if [edx].asym.mem_type & MT_FLOAT || \
+    .if [edx].asym.mem_type & MT_FLOAT || [edx].asym.mem_type == MT_YWORD || \
         ( [edx].asym.mem_type == MT_OWORD && vector_call )
 
         .return CheckXMM(reg, paramvalue, regs_used, param)
@@ -1413,12 +1422,12 @@ elf64_pcheck proc public uses esi edi ebx pProc:dsym_t, paranode:dsym_t, used:pt
     mov dl,[esi].mem_type
 
     .switch
-      .case ( al > 16 || [esi].sint_flag & SINT_ISVARARG )
+      .case ( [esi].sint_flag & SINT_ISVARARG )
         xor eax,eax
         mov [esi].string_ptr,eax
         .return
 
-      .case ( dl & MT_FLOAT )
+      .case ( dl & MT_FLOAT || dl == MT_YWORD )
         movzx ecx,ch
         inc byte ptr [ebx+1]
         .if ( ecx > 7 )
@@ -1429,8 +1438,19 @@ elf64_pcheck proc public uses esi edi ebx pProc:dsym_t, paranode:dsym_t, used:pt
             mov [esi].string_ptr,eax
             .return
         .endif
-        lea eax,[ecx+T_XMM0]
+        .if eax == 64
+            lea eax,[ecx+T_ZMM0]
+        .elseif eax == 32
+            lea eax,[ecx+T_YMM0]
+        .else
+            lea eax,[ecx+T_XMM0]
+        .endif
         .endc
+
+      .case ( al > 16 )
+        xor eax,eax
+        mov [esi].string_ptr,eax
+        .return
 
       .case ( al == 16 || dl == MT_OWORD )
         .if ( cl < 5 )
@@ -1522,7 +1542,7 @@ elf64_fcstart proc uses esi edi ebx pp:dsym_t, numparams:int_t, start:int_t,
     .else
 
         .for ( edi = [edx].proc_info.paralist : edi : edi = [edi].esym.prev )
-            .if [edi].asym.mem_type & MT_FLOAT
+            .if [edi].asym.mem_type & MT_FLOAT || [edi].asym.mem_type == MT_YWORD
                 inc eax
             .else
                 inc esi
@@ -1647,7 +1667,7 @@ elf64_param proc uses esi edi ebx pp:dsym_t, index:int_t, param:dsym_t,
         movzx eax,[edx].mem_type
     .endif
 
-    .if ( !( eax & MT_FLOAT ) && esi >= 6 )
+    .if ( !( eax & MT_FLOAT || eax == MT_YWORD ) && esi >= 6 )
 
         .return 0 .if !stack
         mov ebx,T_RAX
@@ -1656,7 +1676,7 @@ elf64_param proc uses esi edi ebx pp:dsym_t, index:int_t, param:dsym_t,
     assume edx:nothing
     mov sym,edx
 
-    .if eax & MT_FLOAT
+    .if eax & MT_FLOAT || eax == MT_YWORD
         mov eax,[edi].base_reg
         .if eax
             mov eax,[eax].asm_tok.tokval
